@@ -36,120 +36,45 @@ impl TracingHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InProcessDriverTracing {
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
-    Docker,
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
-    Kubernetes,
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
-    Podman,
-}
-
-impl InProcessDriverTracing {
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
-    fn target_prefix(self) -> &'static str {
-        match self {
-            Self::Docker => openshell_driver_docker::otel_tracing::IN_PROCESS_TARGET_PREFIX,
-            Self::Kubernetes => openshell_driver_kubernetes::otel_tracing::IN_PROCESS_TARGET_PREFIX,
-            Self::Podman => openshell_driver_podman::otel_tracing::IN_PROCESS_TARGET_PREFIX,
-        }
-    }
-}
-
-fn in_process_driver_tracing(driver: &ConfiguredComputeDriver) -> Option<InProcessDriverTracing> {
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
+fn in_process_driver_tracing(
+    driver: &ConfiguredComputeDriver,
+) -> Option<openshell_otel::ComputeDriverTracing> {
     match driver {
-        ConfiguredComputeDriver::Registered(registration) if registration.name == "docker" => {
-            Some(InProcessDriverTracing::Docker)
-        }
-        ConfiguredComputeDriver::Registered(registration) if registration.name == "podman" => {
-            Some(InProcessDriverTracing::Podman)
-        }
-        ConfiguredComputeDriver::Registered(registration) if registration.name == "kubernetes" => {
-            Some(InProcessDriverTracing::Kubernetes)
-        }
-        _ => None,
-    }
-    #[cfg(not(all(not(target_os = "windows"), feature = "in-tree-compute-drivers")))]
-    {
-        let _ = driver;
-        None
+        ConfiguredComputeDriver::Registered(registration) => registration.in_process_tracing(),
+        ConfiguredComputeDriver::Remote { .. } => None,
     }
 }
 
-fn in_process_driver_target_prefix(driver: Option<InProcessDriverTracing>) -> Option<&'static str> {
-    #[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
-    {
-        driver.map(InProcessDriverTracing::target_prefix)
-    }
-    #[cfg(not(all(not(target_os = "windows"), feature = "in-tree-compute-drivers")))]
-    {
-        let _ = driver;
-        None
-    }
-}
-
-#[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
 fn in_process_driver_provider(
-    driver: Option<InProcessDriverTracing>,
+    driver: Option<openshell_otel::ComputeDriverTracing>,
     endpoint: Option<&str>,
-    gateway_name: Option<&str>,
+    gateway: GatewayResourceAttributes<'_>,
 ) -> (Option<SdkTracerProvider>, Option<SetupError>) {
-    match driver {
-        Some(InProcessDriverTracing::Docker) => {
-            openshell_driver_docker::otel_tracing::provider_for(endpoint, gateway_name)
-        }
-        Some(InProcessDriverTracing::Kubernetes) => {
-            openshell_driver_kubernetes::otel_tracing::provider_for(endpoint, gateway_name)
-        }
-        Some(InProcessDriverTracing::Podman) => {
-            openshell_driver_podman::otel_tracing::provider_for(endpoint, gateway_name)
-        }
-        None => (None, None),
-    }
+    driver.map_or_else(
+        || (None, None),
+        |descriptor| {
+            descriptor.provider_for(
+                endpoint,
+                openshell_core::VERSION,
+                gateway.name(),
+                gateway.compute_driver(),
+            )
+        },
+    )
 }
 
-#[cfg(not(all(not(target_os = "windows"), feature = "in-tree-compute-drivers")))]
-fn in_process_driver_provider(
-    _driver: Option<InProcessDriverTracing>,
-    _endpoint: Option<&str>,
-    _gateway_name: Option<&str>,
-) -> (Option<SdkTracerProvider>, Option<SetupError>) {
-    (None, None)
-}
-
-#[cfg(all(not(target_os = "windows"), feature = "in-tree-compute-drivers"))]
 fn in_process_driver_layer<S>(
     provider: &Option<SdkTracerProvider>,
-    driver: Option<InProcessDriverTracing>,
+    driver: Option<openshell_otel::ComputeDriverTracing>,
 ) -> Option<openshell_otel::TargetOtlpLayer<S>>
 where
     S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
-    provider.as_ref().map(|provider| match driver {
-        Some(InProcessDriverTracing::Docker) => {
-            openshell_driver_docker::otel_tracing::in_process_layer(provider)
-        }
-        Some(InProcessDriverTracing::Kubernetes) => {
-            openshell_driver_kubernetes::otel_tracing::in_process_layer(provider)
-        }
-        Some(InProcessDriverTracing::Podman) => {
-            openshell_driver_podman::otel_tracing::in_process_layer(provider)
-        }
-        None => unreachable!("a driver provider requires a selected driver"),
+    provider.as_ref().map(|provider| {
+        driver
+            .expect("a driver provider requires a selected driver")
+            .in_process_layer(provider)
     })
-}
-
-#[cfg(not(all(not(target_os = "windows"), feature = "in-tree-compute-drivers")))]
-fn in_process_driver_layer<S>(
-    _provider: &Option<SdkTracerProvider>,
-    _driver: Option<InProcessDriverTracing>,
-) -> Option<openshell_otel::TargetOtlpLayer<S>>
-where
-    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
-{
-    None
 }
 
 pub fn install(
@@ -167,18 +92,17 @@ pub fn install(
         .flatten()
         .map(|config| config.endpoint.as_str());
     let (driver_tracer_provider, driver_setup_error) =
-        in_process_driver_provider(selected_driver, driver_endpoint, gateway.name());
+        in_process_driver_provider(selected_driver, driver_endpoint, gateway);
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
         .with(tracing_log_bus.layer())
-        .with(tracer_provider.as_ref().map(|provider| {
-            crate::otel_tracing::layer_excluding_driver(
-                provider,
-                in_process_driver_target_prefix(selected_driver),
-            )
-        }))
+        .with(
+            tracer_provider.as_ref().map(|provider| {
+                crate::otel_tracing::layer_excluding_driver(provider, selected_driver)
+            }),
+        )
         .with(in_process_driver_layer(
             &driver_tracer_provider,
             selected_driver,
@@ -212,16 +136,26 @@ mod tests {
         };
         assert_eq!(
             in_process_driver_tracing(&registered("podman")),
-            Some(InProcessDriverTracing::Podman)
+            Some(openshell_driver_podman::otel_tracing::TRACING)
         );
         assert_eq!(
             in_process_driver_tracing(&registered("docker")),
-            Some(InProcessDriverTracing::Docker)
+            Some(openshell_driver_docker::otel_tracing::TRACING)
         );
         assert_eq!(
             in_process_driver_tracing(&registered("kubernetes")),
-            Some(InProcessDriverTracing::Kubernetes)
+            Some(openshell_driver_kubernetes::otel_tracing::TRACING)
         );
+        for name in ["podman", "docker", "kubernetes"] {
+            let descriptor = in_process_driver_tracing(&registered(name))
+                .unwrap_or_else(|| panic!("{name} registers an in-process descriptor"));
+            assert_eq!(
+                descriptor.compute_driver(),
+                name,
+                "{name} must register its own descriptor"
+            );
+        }
+        assert_eq!(in_process_driver_tracing(&registered("vm")), None);
         assert_eq!(
             in_process_driver_tracing(&ConfiguredComputeDriver::Remote {
                 name: "custom".to_string(),

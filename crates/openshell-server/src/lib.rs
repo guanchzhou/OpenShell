@@ -1129,6 +1129,7 @@ pub struct ComputeDriverRegistration {
     detection_priority: u16,
     detect: Option<fn() -> bool>,
     factory: Arc<dyn ComputeDriverFactory>,
+    in_process_tracing: Option<openshell_otel::ComputeDriverTracing>,
 }
 
 impl std::fmt::Debug for ComputeDriverRegistration {
@@ -1144,11 +1145,16 @@ impl std::fmt::Debug for ComputeDriverRegistration {
 
 impl ComputeDriverRegistration {
     /// Define a compiled driver. Lower detection priorities are preferred.
+    ///
+    /// `in_process_tracing` is the driver's tracing descriptor when it runs
+    /// inside the gateway process, and `None` for drivers that run elsewhere
+    /// or are not traced.
     pub fn new(
         name: impl Into<String>,
         detection_priority: u16,
         detect: Option<fn() -> bool>,
         factory: impl ComputeDriverFactory + 'static,
+        in_process_tracing: Option<openshell_otel::ComputeDriverTracing>,
     ) -> Result<Self> {
         let name = openshell_core::config::normalize_compute_driver_name(&name.into())
             .map_err(Error::config)?;
@@ -1157,7 +1163,13 @@ impl ComputeDriverRegistration {
             detection_priority,
             detect,
             factory: Arc::new(factory),
+            in_process_tracing,
         })
+    }
+
+    #[must_use]
+    pub fn in_process_tracing(&self) -> Option<openshell_otel::ComputeDriverTracing> {
+        self.in_process_tracing
     }
 }
 
@@ -1285,6 +1297,7 @@ pub fn install_default_compute_drivers() -> ComputeDriverRegistry {
                     100,
                     Some(|| std::env::var_os("KUBERNETES_SERVICE_HOST").is_some()),
                     KubernetesComputeDriverFactory,
+                    Some(openshell_driver_kubernetes::otel_tracing::TRACING),
                 )
                 .expect("valid kubernetes registration"),
             )
@@ -1296,6 +1309,7 @@ pub fn install_default_compute_drivers() -> ComputeDriverRegistry {
                     200,
                     Some(openshell_core::config::is_podman_available),
                     PodmanComputeDriverFactory,
+                    Some(openshell_driver_podman::otel_tracing::TRACING),
                 )
                 .expect("valid podman registration"),
             )
@@ -1307,13 +1321,14 @@ pub fn install_default_compute_drivers() -> ComputeDriverRegistry {
                     300,
                     Some(openshell_core::config::is_docker_available),
                     DockerComputeDriverFactory,
+                    Some(openshell_driver_docker::otel_tracing::TRACING),
                 )
                 .expect("valid docker registration"),
             )
             .expect("unique docker registration");
         registry
             .install(
-                ComputeDriverRegistration::new("vm", u16::MAX, None, VmComputeDriverFactory)
+                ComputeDriverRegistration::new("vm", u16::MAX, None, VmComputeDriverFactory, None)
                     .expect("valid vm registration"),
             )
             .expect("unique vm registration");
@@ -1322,8 +1337,14 @@ pub fn install_default_compute_drivers() -> ComputeDriverRegistry {
     {
         registry
             .install(
-                ComputeDriverRegistration::new("mxc", u16::MAX, None, MxcComputeDriverFactory)
-                    .expect("valid mxc registration"),
+                ComputeDriverRegistration::new(
+                    "mxc",
+                    u16::MAX,
+                    None,
+                    MxcComputeDriverFactory,
+                    None,
+                )
+                .expect("valid mxc registration"),
             )
             .expect("unique mxc registration");
         for name in ["kubernetes", "podman", "docker", "vm"] {
@@ -1334,6 +1355,7 @@ pub fn install_default_compute_drivers() -> ComputeDriverRegistry {
                         u16::MAX,
                         None,
                         UnsupportedComputeDriverFactory,
+                        None,
                     )
                     .expect("valid unsupported registration"),
                 )
@@ -2361,6 +2383,7 @@ operator_namespace_label = "openshell.ai/workspace=true"
                     300,
                     Some(available_third_probe),
                     TestComputeDriverFactory,
+                    None,
                 )
                 .unwrap(),
             )
@@ -2372,6 +2395,7 @@ operator_namespace_label = "openshell.ai/workspace=true"
                     100,
                     Some(unavailable_first_probe),
                     TestComputeDriverFactory,
+                    None,
                 )
                 .unwrap(),
             )
@@ -2383,6 +2407,7 @@ operator_namespace_label = "openshell.ai/workspace=true"
                     200,
                     Some(available_second_probe),
                     TestComputeDriverFactory,
+                    None,
                 )
                 .unwrap(),
             )

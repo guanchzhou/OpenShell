@@ -886,6 +886,7 @@ mod tests {
                     100,
                     Some(detect_registered_docker),
                     TestComputeDriverFactory,
+                    None,
                 )
                 .unwrap(),
             )

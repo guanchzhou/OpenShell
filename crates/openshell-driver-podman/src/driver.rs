@@ -719,10 +719,10 @@ impl PodmanComputeDriver {
 
     /// Create a sandbox container.
     #[tracing::instrument(
-        name = "podman.create_sandbox",
+        name = "podman.provision",
         skip(self, sandbox),
         fields(
-            otel.name = "podman.create_sandbox",
+            otel.name = "podman.provision",
             otel.status_code = tracing::field::Empty,
             sandbox.id = %sandbox.id,
             sandbox.name = %sandbox.name,
@@ -1799,7 +1799,7 @@ mod tests {
         use tracing::instrument::WithSubscriber as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let _tracing_lock = crate::otel_tracing::test_lock().await;
+        let _tracing_lock = openshell_otel_test_support::tracing_test_lock().await;
         let (socket_path, _requests, handle) = spawn_podman_stub(
             "trace-stop",
             vec![
@@ -1815,7 +1815,8 @@ mod tests {
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = tracing_subscriber::registry().with(crate::otel_tracing::layer(&provider));
+        let subscriber =
+            tracing_subscriber::registry().with(crate::otel_tracing::TRACING.layer(&provider));
 
         test_driver(socket_path.clone())
             .stop_sandbox("sandbox-1")
@@ -1848,7 +1849,7 @@ mod tests {
         use tracing::instrument::WithSubscriber as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let _tracing_lock = crate::otel_tracing::test_lock().await;
+        let _tracing_lock = openshell_otel_test_support::tracing_test_lock().await;
         let (socket_path, _requests, handle) = spawn_podman_stub(
             "trace-create",
             vec![
@@ -1867,7 +1868,8 @@ mod tests {
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = tracing_subscriber::registry().with(crate::otel_tracing::layer(&provider));
+        let subscriber =
+            tracing_subscriber::registry().with(crate::otel_tracing::TRACING.layer(&provider));
 
         test_driver(socket_path.clone())
             .create_sandbox(&plain_sandbox("sandbox-trace", "demo"))
@@ -1880,7 +1882,7 @@ mod tests {
         let spans = exporter.get_finished_spans().unwrap();
         let create = spans
             .iter()
-            .find(|span| span.name == "podman.create_sandbox")
+            .find(|span| span.name == "podman.provision")
             .expect("create operation should be exported");
         for name in [
             "podman.prepare_images",
@@ -1908,7 +1910,7 @@ mod tests {
         use tracing::instrument::WithSubscriber as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let _tracing_lock = crate::otel_tracing::test_lock().await;
+        let _tracing_lock = openshell_otel_test_support::tracing_test_lock().await;
         let (socket_path, _requests, handle) = spawn_podman_stub(
             "trace-image-failure",
             vec![
@@ -1920,7 +1922,8 @@ mod tests {
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = tracing_subscriber::registry().with(crate::otel_tracing::layer(&provider));
+        let subscriber =
+            tracing_subscriber::registry().with(crate::otel_tracing::TRACING.layer(&provider));
 
         test_driver(socket_path.clone())
             .create_sandbox(&plain_sandbox("sandbox-trace", "demo"))
@@ -1949,12 +1952,13 @@ mod tests {
         use tracing::instrument::WithSubscriber as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let _tracing_lock = crate::otel_tracing::test_lock().await;
+        let _tracing_lock = openshell_otel_test_support::tracing_test_lock().await;
         let exporter = InMemorySpanExporterBuilder::new().build();
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
-        let subscriber = tracing_subscriber::registry().with(crate::otel_tracing::layer(&provider));
+        let subscriber =
+            tracing_subscriber::registry().with(crate::otel_tracing::TRACING.layer(&provider));
 
         let (start_socket, _requests, start_handle) = spawn_podman_stub(
             "trace-start",
@@ -1981,7 +1985,8 @@ mod tests {
                 StubResponse::new(StatusCode::NO_CONTENT, ""),
             ],
         );
-        let subscriber = tracing_subscriber::registry().with(crate::otel_tracing::layer(&provider));
+        let subscriber =
+            tracing_subscriber::registry().with(crate::otel_tracing::TRACING.layer(&provider));
         test_driver(delete_socket.clone())
             .delete_sandbox("sandbox-1")
             .with_subscriber(subscriber)
