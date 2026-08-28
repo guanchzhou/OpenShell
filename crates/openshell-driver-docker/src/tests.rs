@@ -118,8 +118,10 @@ fn runtime_config() -> DockerDriverRuntimeConfig {
             key: PathBuf::from("/tmp/tls.key"),
         }),
         daemon_version: "28.0.0".to_string(),
-        supports_gpu: false,
-        allow_all_default_gpu: false,
+        gpu: DockerGpuRuntimeCapabilities {
+            cdi_supported: false,
+            wsl_all_gpu_fallback_enabled: false,
+        },
         sandbox_pids_limit: DEFAULT_SANDBOX_PIDS_LIMIT,
         enable_bind_mounts: false,
     }
@@ -149,7 +151,7 @@ fn inspected_volume(driver: &str, options: HashMap<String, String>) -> bollard::
 }
 
 fn test_driver_with_config(config: DockerDriverRuntimeConfig) -> DockerComputeDriver {
-    let allow_all_default_gpu = config.allow_all_default_gpu;
+    let wsl_all_gpu_fallback_enabled = config.gpu.wsl_all_gpu_fallback_enabled;
     DockerComputeDriver {
         docker: Arc::new(
             Docker::connect_with_http("http://127.0.0.1:2375", 1, bollard::API_DEFAULT_VERSION)
@@ -160,7 +162,7 @@ fn test_driver_with_config(config: DockerDriverRuntimeConfig) -> DockerComputeDr
         pending: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         gpu_selector: Arc::new(CdiGpuDefaultSelector::new(
             CdiGpuInventory::default(),
-            allow_all_default_gpu,
+            wsl_all_gpu_fallback_enabled,
         )),
         lifecycle_event_fences: DockerLifecycleEventFences::default(),
     }
@@ -2118,7 +2120,7 @@ fn validate_sandbox_rejects_unknown_driver_config_fields() {
 #[test]
 fn validate_sandbox_accepts_gpu_count_request_shape() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     sandbox.spec.as_mut().unwrap().resource_requirements = Some(gpu_resources(Some(2)));
 
@@ -2129,7 +2131,7 @@ fn validate_sandbox_accepts_gpu_count_request_shape() {
 #[test]
 fn validate_sandbox_accepts_gpu_count_matching_cdi_devices() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(Some(2)));
@@ -2145,7 +2147,7 @@ fn validate_sandbox_accepts_gpu_count_matching_cdi_devices() {
 #[test]
 fn validate_sandbox_accepts_single_cdi_device_without_gpu_count() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(None));
@@ -2158,7 +2160,7 @@ fn validate_sandbox_accepts_single_cdi_device_without_gpu_count() {
 #[test]
 fn validate_sandbox_rejects_multiple_cdi_devices_without_gpu_count() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(None));
@@ -2179,7 +2181,7 @@ fn validate_sandbox_rejects_multiple_cdi_devices_without_gpu_count() {
 #[test]
 fn validate_sandbox_rejects_cdi_devices_without_gpu_request() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     sandbox
         .spec
@@ -2199,7 +2201,7 @@ fn validate_sandbox_rejects_cdi_devices_without_gpu_request() {
 #[test]
 fn validate_sandbox_rejects_gpu_count_mismatched_cdi_devices() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(Some(2)));
@@ -2255,7 +2257,7 @@ fn validate_sandbox_auth_accepts_gateway_token() {
 #[test]
 fn build_container_create_body_maps_default_gpu_to_selected_cdi_device() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     sandbox.spec.as_mut().unwrap().resource_requirements = Some(gpu_resources(None));
 
@@ -2285,7 +2287,7 @@ fn build_container_create_body_maps_default_gpu_to_selected_cdi_device() {
 #[test]
 fn build_container_create_body_omits_devices_without_resolved_default_cdi_devices() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     sandbox.spec.as_mut().unwrap().resource_requirements = Some(gpu_resources(None));
 
@@ -2303,7 +2305,7 @@ fn build_container_create_body_omits_devices_without_resolved_default_cdi_device
 #[test]
 fn build_container_create_body_passes_explicit_cdi_device_id_through() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(None));
@@ -2327,7 +2329,7 @@ fn build_container_create_body_passes_explicit_cdi_device_id_through() {
 #[test]
 fn build_container_create_body_rejects_gpu_count_mismatched_cdi_devices() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let mut sandbox = test_sandbox();
     let spec = sandbox.spec.as_mut().unwrap();
     spec.resource_requirements = Some(gpu_resources(Some(2)));
@@ -2374,7 +2376,7 @@ fn build_container_create_body_rejects_empty_cdi_devices() {
 #[test]
 fn driver_default_gpu_selection_consumes_distinct_devices_for_creates() {
     let mut config = runtime_config();
-    config.supports_gpu = true;
+    config.gpu.cdi_supported = true;
     let driver = test_driver_with_config(config);
     driver.gpu_selector.refresh(
         CdiGpuInventory::new(["nvidia.com/gpu=0", "nvidia.com/gpu=1"]),
