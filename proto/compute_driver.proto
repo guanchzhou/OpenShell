@@ -78,6 +78,33 @@ message GetCapabilitiesResponse {
   // Whether the gateway should stop running sandbox compute during graceful
   // shutdown and restart the retained running intent on startup.
   bool gateway_manages_lifecycle = 6;
+  // Static portable resource request forms supported by this configured driver.
+  ResourceCapabilities resource_capabilities = 7;
+}
+
+// Static portable resource request forms supported by a compute driver.
+// An omitted domain means the driver does not report that domain.
+message ResourceCapabilities {
+  CpuResourceCapabilities cpu = 1;
+  MemoryResourceCapabilities memory = 2;
+  GpuResourceCapabilities gpu = 3;
+}
+
+message CpuResourceCapabilities {
+  // The driver accepts and enforces a portable CPU limit.
+  bool limit_supported = 1;
+}
+
+message MemoryResourceCapabilities {
+  // The driver accepts and enforces a portable memory limit.
+  bool limit_supported = 1;
+}
+
+message GpuResourceCapabilities {
+  // The driver accepts a GPU request with no explicit count.
+  bool default_selection_supported = 1;
+  // The driver accepts an explicit `gpu.count` request.
+  bool count_selection_supported = 2;
 }
 
 message GetGatewayListenerRequirementsRequest {}
